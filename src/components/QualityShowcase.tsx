@@ -42,55 +42,106 @@ const QualityShowcase = () => {
         return () => videoRef.current?.removeEventListener('loadedmetadata', onLoad);
       }
     } else {
-      // .ts via mpegts.js com configurações otimizadas
+      // .ts via mpegts.js - Stream contínuo com reload automático
       if (mpegts.isSupported()) {
-        const player = mpegts.createPlayer(
-          {
-            type: 'mpegts',
-            isLive: true,
-            url: channelUrl,
-            withCredentials: false,
-          },
-          {
-            enableWorker: true,
-            enableStashBuffer: true,
-            stashInitialSize: 384,
-            liveBufferLatencyChasing: false,
-            liveBufferLatencyMaxLatency: 3,
-            liveBufferLatencyMinRemain: 0.5,
-            autoCleanupSourceBuffer: true,
-            autoCleanupMaxBackwardDuration: 30,
-            autoCleanupMinBackwardDuration: 15,
-          }
-        );
-        
-        player.on(mpegts.Events.ERROR, (errorType, errorDetail, errorInfo) => {
-          console.error('MPEGTS Error:', errorType, errorDetail, errorInfo);
-          if (errorType === mpegts.ErrorTypes.NETWORK_ERROR) {
-            setTimeout(() => {
-              player.unload();
-              player.load();
-              player.play();
-            }, 2000);
-          }
-        });
+        let player: any = null;
+        let isDestroyed = false;
 
-        player.attachMediaElement(videoRef.current);
-        player.load();
-        player.play();
+        const initPlayer = () => {
+          if (isDestroyed || !videoRef.current) return;
+
+          player = mpegts.createPlayer(
+            {
+              type: 'mpegts',
+              isLive: true,
+              url: channelUrl,
+              withCredentials: false,
+            },
+            {
+              enableWorker: true,
+              enableStashBuffer: true,
+              stashInitialSize: 512,
+              liveBufferLatencyChasing: false,
+              autoCleanupSourceBuffer: true,
+              autoCleanupMaxBackwardDuration: 20,
+              autoCleanupMinBackwardDuration: 10,
+            }
+          );
+          
+          player.on(mpegts.Events.ERROR, (errorType: any, errorDetail: any) => {
+            console.error('MPEGTS Error:', errorType, errorDetail);
+            if (!isDestroyed) {
+              setTimeout(() => {
+                if (player && !isDestroyed) {
+                  player.unload();
+                  player.load();
+                  player.play();
+                }
+              }, 1000);
+            }
+          });
+
+          // Detectar quando o stream "termina" e recarregar
+          const handleEnded = () => {
+            console.log('Stream ended, reloading...');
+            if (!isDestroyed && player) {
+              setTimeout(() => {
+                if (!isDestroyed && videoRef.current) {
+                  player.unload();
+                  player.load();
+                  player.play();
+                }
+              }, 500);
+            }
+          };
+
+          if (videoRef.current) {
+            videoRef.current.addEventListener('ended', handleEnded);
+            player.attachMediaElement(videoRef.current);
+            player.load();
+            player.play();
+          }
+        };
+
+        initPlayer();
         
         return () => {
-          player.pause();
-          player.unload();
-          player.detachMediaElement();
-          player.destroy();
+          isDestroyed = true;
+          if (player) {
+            try {
+              player.pause();
+              player.unload();
+              player.detachMediaElement();
+              player.destroy();
+            } catch (e) {
+              console.error('Error destroying player:', e);
+            }
+          }
         };
       } else {
-        // Fallback: reprodução nativa
+        // Fallback: reprodução nativa com reload
+        const handleEnded = () => {
+          if (videoRef.current) {
+            setTimeout(() => {
+              if (videoRef.current) {
+                videoRef.current.load();
+                videoRef.current.play();
+              }
+            }, 500);
+          }
+        };
+
         videoRef.current.src = channelUrl;
+        videoRef.current.addEventListener('ended', handleEnded);
         const onLoad = () => videoRef.current?.play();
         videoRef.current.addEventListener('loadedmetadata', onLoad);
-        return () => videoRef.current?.removeEventListener('loadedmetadata', onLoad);
+        
+        return () => {
+          if (videoRef.current) {
+            videoRef.current.removeEventListener('ended', handleEnded);
+            videoRef.current.removeEventListener('loadedmetadata', onLoad);
+          }
+        };
       }
     }
   }, [channelUrl, isHls]);
@@ -111,7 +162,6 @@ const QualityShowcase = () => {
           <div className="relative aspect-video rounded-lg overflow-hidden shadow-2xl bg-black">
             <video
               ref={videoRef}
-              src={channelUrl}
               controls
               muted
               playsInline
