@@ -14,10 +14,26 @@ const QualityShowcase = () => {
 
     if (isHls) {
       if (Hls.isSupported()) {
-        const hls = new Hls({ enableWorker: true, lowLatencyMode: true });
+        const hls = new Hls({ 
+          enableWorker: true, 
+          lowLatencyMode: false,
+          maxBufferLength: 30,
+          maxMaxBufferLength: 60,
+          backBufferLength: 10,
+        });
         hls.loadSource(channelUrl);
         hls.attachMedia(videoRef.current);
         hls.on(Hls.Events.MANIFEST_PARSED, () => videoRef.current?.play());
+        hls.on(Hls.Events.ERROR, (event, data) => {
+          if (data.fatal) {
+            console.error('HLS Fatal Error:', data);
+            setTimeout(() => {
+              hls.destroy();
+              hls.loadSource(channelUrl);
+              hls.attachMedia(videoRef.current!);
+            }, 1000);
+          }
+        });
         return () => { hls.destroy(); };
       } else if (videoRef.current.canPlayType('application/vnd.apple.mpegurl')) {
         videoRef.current.src = channelUrl;
@@ -26,7 +42,7 @@ const QualityShowcase = () => {
         return () => videoRef.current?.removeEventListener('loadedmetadata', onLoad);
       }
     } else {
-      // .ts via mpegts.js (MSE) over HTTPS proxy
+      // .ts via mpegts.js com configurações otimizadas
       if (mpegts.isSupported()) {
         const player = mpegts.createPlayer(
           {
@@ -37,21 +53,40 @@ const QualityShowcase = () => {
           },
           {
             enableWorker: true,
-            enableStashBuffer: false,
-            liveBufferLatencyChasing: true,
+            enableStashBuffer: true,
+            stashInitialSize: 384,
+            liveBufferLatencyChasing: false,
+            liveBufferLatencyMaxLatency: 3,
+            liveBufferLatencyMinRemain: 0.5,
             autoCleanupSourceBuffer: true,
+            autoCleanupMaxBackwardDuration: 30,
+            autoCleanupMinBackwardDuration: 15,
           }
         );
+        
+        player.on(mpegts.Events.ERROR, (errorType, errorDetail, errorInfo) => {
+          console.error('MPEGTS Error:', errorType, errorDetail, errorInfo);
+          if (errorType === mpegts.ErrorTypes.NETWORK_ERROR) {
+            setTimeout(() => {
+              player.unload();
+              player.load();
+              player.play();
+            }, 2000);
+          }
+        });
+
         player.attachMediaElement(videoRef.current);
         player.load();
         player.play();
+        
         return () => {
+          player.pause();
           player.unload();
           player.detachMediaElement();
           player.destroy();
         };
       } else {
-        // Fallback: tentar reprodução nativa
+        // Fallback: reprodução nativa
         videoRef.current.src = channelUrl;
         const onLoad = () => videoRef.current?.play();
         videoRef.current.addEventListener('loadedmetadata', onLoad);
