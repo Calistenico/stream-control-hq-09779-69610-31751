@@ -45,158 +45,72 @@ const QualityShowcase = () => {
         cleanupFn = () => videoRef.current?.removeEventListener('loadedmetadata', onLoad);
       }
     } else {
-      // .ts stream com reload automático ao finalizar
-      if (mpegts.isSupported()) {
-        let player: any = null;
-        let isDestroyed = false;
-        let reloadTimeout: NodeJS.Timeout | null = null;
+      // .ts stream com reload simplificado usando apenas o elemento video nativo
+      let reloadTimeout: NodeJS.Timeout | null = null;
+      let isCleanedUp = false;
 
-        const initPlayer = () => {
-          if (isDestroyed || !videoRef.current) return;
-
-          console.log('Iniciando player mpegts.js...');
-
-          player = mpegts.createPlayer(
-            {
-              type: 'mpegts',
-              isLive: false, // Mudado para false pois é um arquivo único
-              url: channelUrl,
-              withCredentials: false,
-            },
-            {
-              enableWorker: true,
-              enableStashBuffer: true,
-              stashInitialSize: 512,
-              liveBufferLatencyChasing: false,
-              autoCleanupSourceBuffer: true,
-              autoCleanupMaxBackwardDuration: 20,
-              autoCleanupMinBackwardDuration: 10,
-            }
-          );
-          
-          player.on(mpegts.Events.ERROR, (errorType: any, errorDetail: any) => {
-            console.error('MPEGTS Error:', errorType, errorDetail);
-            if (!isDestroyed) {
-              reloadTimeout = setTimeout(() => reloadStream(), 1000);
-            }
-          });
-
-          if (videoRef.current) {
-            player.attachMediaElement(videoRef.current);
-            player.load();
-            player.play().catch((e: any) => console.error('Play error:', e));
-          }
-        };
-
-        const reloadStream = () => {
-          console.log('Recarregando stream...');
-          if (reloadTimeout) clearTimeout(reloadTimeout);
-          
-          if (player && !isDestroyed) {
-            try {
-              player.pause();
-              player.unload();
-              player.detachMediaElement();
-              player.destroy();
-            } catch (e) {
-              console.error('Error destroying player:', e);
-            }
-          }
-          
-          setReloadCount(prev => prev + 1);
-          reloadTimeout = setTimeout(() => {
-            if (!isDestroyed) {
-              initPlayer();
-            }
-          }, 500);
-        };
-
-        // Detectar quando o vídeo termina
-        const handleEnded = () => {
-          console.log('Stream finalizado, reiniciando em loop...');
-          reloadStream();
-        };
-
-        // Detectar stall/travamento
-        const handleStalled = () => {
-          console.log('Stream travado, recarregando...');
-          reloadStream();
-        };
-
-        const handleWaiting = () => {
-          console.log('Stream aguardando dados...');
-        };
-
-        if (videoRef.current) {
-          videoRef.current.addEventListener('ended', handleEnded);
-          videoRef.current.addEventListener('stalled', handleStalled);
-          videoRef.current.addEventListener('waiting', handleWaiting);
-        }
-
-        initPlayer();
+      const reloadVideo = () => {
+        if (isCleanedUp || !videoRef.current) return;
         
-        cleanupFn = () => {
-          isDestroyed = true;
-          if (reloadTimeout) clearTimeout(reloadTimeout);
-          if (videoRef.current) {
-            videoRef.current.removeEventListener('ended', handleEnded);
-            videoRef.current.removeEventListener('stalled', handleStalled);
-            videoRef.current.removeEventListener('waiting', handleWaiting);
+        console.log('Recarregando stream TS...');
+        if (reloadTimeout) clearTimeout(reloadTimeout);
+        
+        // Incrementar contador para forçar re-render
+        setReloadCount(prev => prev + 1);
+        
+        // Aguardar um pouco antes de recarregar
+        reloadTimeout = setTimeout(() => {
+          if (!isCleanedUp && videoRef.current) {
+            videoRef.current.load();
+            videoRef.current.play().catch(e => {
+              console.error('Erro ao reproduzir:', e);
+              // Se falhar, tentar novamente
+              setTimeout(() => reloadVideo(), 2000);
+            });
           }
-          if (player) {
-            try {
-              player.pause();
-              player.unload();
-              player.detachMediaElement();
-              player.destroy();
-            } catch (e) {
-              console.error('Error destroying player:', e);
-            }
-          }
-        };
-      } else {
-        // Fallback: reprodução nativa com loop automático
-        let reloadTimeout: NodeJS.Timeout | null = null;
+        }, 300);
+      };
 
-        const reloadVideo = () => {
-          console.log('Recarregando vídeo nativo...');
-          if (videoRef.current && reloadTimeout) {
-            clearTimeout(reloadTimeout);
-          }
-          setReloadCount(prev => prev + 1);
-          reloadTimeout = setTimeout(() => {
-            if (videoRef.current) {
-              videoRef.current.load();
-              videoRef.current.play().catch(e => console.error('Play error:', e));
-            }
-          }, 500);
-        };
+      const handleEnded = () => {
+        console.log('Stream finalizado - reiniciando imediatamente...');
+        reloadVideo();
+      };
 
-        const handleEnded = () => {
-          console.log('Vídeo finalizado, reiniciando...');
-          reloadVideo();
-        };
+      const handleError = () => {
+        console.log('Erro no stream - reiniciando...');
+        reloadVideo();
+      };
 
-        const handleStalled = () => {
-          console.log('Vídeo travado, recarregando...');
-          reloadVideo();
-        };
+      const handleStalled = () => {
+        console.log('Stream travado - reiniciando...');
+        reloadVideo();
+      };
 
+      // Configurar vídeo
+      if (videoRef.current) {
         videoRef.current.src = channelUrl;
         videoRef.current.addEventListener('ended', handleEnded);
+        videoRef.current.addEventListener('error', handleError);
         videoRef.current.addEventListener('stalled', handleStalled);
-        const onLoad = () => videoRef.current?.play().catch(e => console.error('Play error:', e));
-        videoRef.current.addEventListener('loadedmetadata', onLoad);
         
-        cleanupFn = () => {
-          if (reloadTimeout) clearTimeout(reloadTimeout);
-          if (videoRef.current) {
-            videoRef.current.removeEventListener('ended', handleEnded);
-            videoRef.current.removeEventListener('stalled', handleStalled);
-            videoRef.current.removeEventListener('loadedmetadata', onLoad);
-          }
+        const onLoad = () => {
+          videoRef.current?.play().catch(e => {
+            console.error('Erro ao iniciar reprodução:', e);
+            setTimeout(() => reloadVideo(), 2000);
+          });
         };
+        videoRef.current.addEventListener('loadedmetadata', onLoad);
       }
+      
+      cleanupFn = () => {
+        isCleanedUp = true;
+        if (reloadTimeout) clearTimeout(reloadTimeout);
+        if (videoRef.current) {
+          videoRef.current.removeEventListener('ended', handleEnded);
+          videoRef.current.removeEventListener('error', handleError);
+          videoRef.current.removeEventListener('stalled', handleStalled);
+        }
+      };
     }
 
     return () => {
