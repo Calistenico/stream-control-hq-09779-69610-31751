@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import Hls from "hls.js";
 import mpegts from "mpegts.js";
 
@@ -8,9 +8,12 @@ const QualityShowcase = () => {
   const channelUrl = `${functionBase}?url=${encodeURIComponent(targetUrl)}`;
   const isHls = targetUrl.endsWith(".m3u8");
   const videoRef = useRef<HTMLVideoElement>(null);
+  const [reloadCount, setReloadCount] = useState(0);
 
   useEffect(() => {
     if (!videoRef.current) return;
+
+    let cleanupFn: (() => void) | null = null;
 
     if (isHls) {
       if (Hls.isSupported()) {
@@ -34,26 +37,29 @@ const QualityShowcase = () => {
             }, 1000);
           }
         });
-        return () => { hls.destroy(); };
+        cleanupFn = () => { hls.destroy(); };
       } else if (videoRef.current.canPlayType('application/vnd.apple.mpegurl')) {
         videoRef.current.src = channelUrl;
         const onLoad = () => videoRef.current?.play();
         videoRef.current.addEventListener('loadedmetadata', onLoad);
-        return () => videoRef.current?.removeEventListener('loadedmetadata', onLoad);
+        cleanupFn = () => videoRef.current?.removeEventListener('loadedmetadata', onLoad);
       }
     } else {
-      // .ts via mpegts.js - Stream contínuo com reload automático
+      // .ts stream com reload automático ao finalizar
       if (mpegts.isSupported()) {
         let player: any = null;
         let isDestroyed = false;
+        let reloadTimeout: NodeJS.Timeout | null = null;
 
         const initPlayer = () => {
           if (isDestroyed || !videoRef.current) return;
 
+          console.log('Iniciando player mpegts.js...');
+
           player = mpegts.createPlayer(
             {
               type: 'mpegts',
-              isLive: true,
+              isLive: false, // Mudado para false pois é um arquivo único
               url: channelUrl,
               withCredentials: false,
             },
@@ -71,42 +77,72 @@ const QualityShowcase = () => {
           player.on(mpegts.Events.ERROR, (errorType: any, errorDetail: any) => {
             console.error('MPEGTS Error:', errorType, errorDetail);
             if (!isDestroyed) {
-              setTimeout(() => {
-                if (player && !isDestroyed) {
-                  player.unload();
-                  player.load();
-                  player.play();
-                }
-              }, 1000);
+              reloadTimeout = setTimeout(() => reloadStream(), 1000);
             }
           });
 
-          // Detectar quando o stream "termina" e recarregar
-          const handleEnded = () => {
-            console.log('Stream ended, reloading...');
-            if (!isDestroyed && player) {
-              setTimeout(() => {
-                if (!isDestroyed && videoRef.current) {
-                  player.unload();
-                  player.load();
-                  player.play();
-                }
-              }, 500);
-            }
-          };
-
           if (videoRef.current) {
-            videoRef.current.addEventListener('ended', handleEnded);
             player.attachMediaElement(videoRef.current);
             player.load();
-            player.play();
+            player.play().catch((e: any) => console.error('Play error:', e));
           }
         };
 
+        const reloadStream = () => {
+          console.log('Recarregando stream...');
+          if (reloadTimeout) clearTimeout(reloadTimeout);
+          
+          if (player && !isDestroyed) {
+            try {
+              player.pause();
+              player.unload();
+              player.detachMediaElement();
+              player.destroy();
+            } catch (e) {
+              console.error('Error destroying player:', e);
+            }
+          }
+          
+          setReloadCount(prev => prev + 1);
+          reloadTimeout = setTimeout(() => {
+            if (!isDestroyed) {
+              initPlayer();
+            }
+          }, 500);
+        };
+
+        // Detectar quando o vídeo termina
+        const handleEnded = () => {
+          console.log('Stream finalizado, reiniciando em loop...');
+          reloadStream();
+        };
+
+        // Detectar stall/travamento
+        const handleStalled = () => {
+          console.log('Stream travado, recarregando...');
+          reloadStream();
+        };
+
+        const handleWaiting = () => {
+          console.log('Stream aguardando dados...');
+        };
+
+        if (videoRef.current) {
+          videoRef.current.addEventListener('ended', handleEnded);
+          videoRef.current.addEventListener('stalled', handleStalled);
+          videoRef.current.addEventListener('waiting', handleWaiting);
+        }
+
         initPlayer();
         
-        return () => {
+        cleanupFn = () => {
           isDestroyed = true;
+          if (reloadTimeout) clearTimeout(reloadTimeout);
+          if (videoRef.current) {
+            videoRef.current.removeEventListener('ended', handleEnded);
+            videoRef.current.removeEventListener('stalled', handleStalled);
+            videoRef.current.removeEventListener('waiting', handleWaiting);
+          }
           if (player) {
             try {
               player.pause();
@@ -119,32 +155,54 @@ const QualityShowcase = () => {
           }
         };
       } else {
-        // Fallback: reprodução nativa com reload
-        const handleEnded = () => {
-          if (videoRef.current) {
-            setTimeout(() => {
-              if (videoRef.current) {
-                videoRef.current.load();
-                videoRef.current.play();
-              }
-            }, 500);
+        // Fallback: reprodução nativa com loop automático
+        let reloadTimeout: NodeJS.Timeout | null = null;
+
+        const reloadVideo = () => {
+          console.log('Recarregando vídeo nativo...');
+          if (videoRef.current && reloadTimeout) {
+            clearTimeout(reloadTimeout);
           }
+          setReloadCount(prev => prev + 1);
+          reloadTimeout = setTimeout(() => {
+            if (videoRef.current) {
+              videoRef.current.load();
+              videoRef.current.play().catch(e => console.error('Play error:', e));
+            }
+          }, 500);
+        };
+
+        const handleEnded = () => {
+          console.log('Vídeo finalizado, reiniciando...');
+          reloadVideo();
+        };
+
+        const handleStalled = () => {
+          console.log('Vídeo travado, recarregando...');
+          reloadVideo();
         };
 
         videoRef.current.src = channelUrl;
         videoRef.current.addEventListener('ended', handleEnded);
-        const onLoad = () => videoRef.current?.play();
+        videoRef.current.addEventListener('stalled', handleStalled);
+        const onLoad = () => videoRef.current?.play().catch(e => console.error('Play error:', e));
         videoRef.current.addEventListener('loadedmetadata', onLoad);
         
-        return () => {
+        cleanupFn = () => {
+          if (reloadTimeout) clearTimeout(reloadTimeout);
           if (videoRef.current) {
             videoRef.current.removeEventListener('ended', handleEnded);
+            videoRef.current.removeEventListener('stalled', handleStalled);
             videoRef.current.removeEventListener('loadedmetadata', onLoad);
           }
         };
       }
     }
-  }, [channelUrl, isHls]);
+
+    return () => {
+      if (cleanupFn) cleanupFn();
+    };
+  }, [channelUrl, isHls, reloadCount]);
 
   return (
     <section className="py-20 bg-background">
