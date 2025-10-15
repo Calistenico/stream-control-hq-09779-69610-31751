@@ -45,72 +45,107 @@ const QualityShowcase = () => {
         cleanupFn = () => videoRef.current?.removeEventListener('loadedmetadata', onLoad);
       }
     } else {
-      // .ts stream com reload simplificado usando apenas o elemento video nativo
-      let reloadTimeout: NodeJS.Timeout | null = null;
-      let isCleanedUp = false;
+      // Stream .ts com mpegts.js - reload apenas quando terminar
+      if (mpegts.isSupported()) {
+        let player: any = null;
+        let isDestroyed = false;
+        let isReloading = false;
 
-      const reloadVideo = () => {
-        if (isCleanedUp || !videoRef.current) return;
-        
-        console.log('Recarregando stream TS...');
-        if (reloadTimeout) clearTimeout(reloadTimeout);
-        
-        // Incrementar contador para forçar re-render
-        setReloadCount(prev => prev + 1);
-        
-        // Aguardar um pouco antes de recarregar
-        reloadTimeout = setTimeout(() => {
-          if (!isCleanedUp && videoRef.current) {
-            videoRef.current.load();
-            videoRef.current.play().catch(e => {
-              console.error('Erro ao reproduzir:', e);
-              // Se falhar, tentar novamente
-              setTimeout(() => reloadVideo(), 2000);
-            });
-          }
-        }, 300);
-      };
+        const createPlayer = () => {
+          if (isDestroyed || !videoRef.current || isReloading) return;
 
-      const handleEnded = () => {
-        console.log('Stream finalizado - reiniciando imediatamente...');
-        reloadVideo();
-      };
+          console.log('Criando player mpegts.js');
 
-      const handleError = () => {
-        console.log('Erro no stream - reiniciando...');
-        reloadVideo();
-      };
+          player = mpegts.createPlayer(
+            {
+              type: 'mpegts',
+              isLive: false,
+              url: channelUrl,
+              withCredentials: false,
+            },
+            {
+              enableWorker: true,
+              enableStashBuffer: true,
+              stashInitialSize: 512,
+              autoCleanupSourceBuffer: true,
+            }
+          );
 
-      const handleStalled = () => {
-        console.log('Stream travado - reiniciando...');
-        reloadVideo();
-      };
+          player.attachMediaElement(videoRef.current);
+          player.load();
+          player.play().catch((e: any) => console.log('Play error:', e));
 
-      // Configurar vídeo
-      if (videoRef.current) {
-        videoRef.current.src = channelUrl;
-        videoRef.current.addEventListener('ended', handleEnded);
-        videoRef.current.addEventListener('error', handleError);
-        videoRef.current.addEventListener('stalled', handleStalled);
-        
-        const onLoad = () => {
-          videoRef.current?.play().catch(e => {
-            console.error('Erro ao iniciar reprodução:', e);
-            setTimeout(() => reloadVideo(), 2000);
+          // Apenas tratar erros fatais
+          player.on(mpegts.Events.ERROR, (errorType: any, errorDetail: any) => {
+            if (errorType === mpegts.ErrorTypes.NETWORK_ERROR && errorDetail === mpegts.ErrorDetails.NETWORK_STATUS_CODE_INVALID) {
+              console.error('Erro fatal de rede');
+            }
           });
         };
-        videoRef.current.addEventListener('loadedmetadata', onLoad);
-      }
-      
-      cleanupFn = () => {
-        isCleanedUp = true;
-        if (reloadTimeout) clearTimeout(reloadTimeout);
+
+        const reloadStream = () => {
+          if (isDestroyed || isReloading) return;
+          
+          console.log('Reiniciando stream em 1 segundo...');
+          isReloading = true;
+
+          if (player) {
+            try {
+              player.pause();
+              player.unload();
+              player.detachMediaElement();
+              player.destroy();
+              player = null;
+            } catch (e) {
+              console.error('Erro ao destruir player:', e);
+            }
+          }
+
+          setTimeout(() => {
+            if (!isDestroyed) {
+              setReloadCount(prev => prev + 1);
+              isReloading = false;
+            }
+          }, 1000);
+        };
+
+        // Detectar apenas quando o vídeo termina
+        const handleEnded = () => {
+          console.log('Vídeo finalizado');
+          reloadStream();
+        };
+
         if (videoRef.current) {
-          videoRef.current.removeEventListener('ended', handleEnded);
-          videoRef.current.removeEventListener('error', handleError);
-          videoRef.current.removeEventListener('stalled', handleStalled);
+          videoRef.current.addEventListener('ended', handleEnded);
         }
-      };
+
+        createPlayer();
+
+        cleanupFn = () => {
+          isDestroyed = true;
+          if (videoRef.current) {
+            videoRef.current.removeEventListener('ended', handleEnded);
+          }
+          if (player) {
+            try {
+              player.pause();
+              player.unload();
+              player.detachMediaElement();
+              player.destroy();
+            } catch (e) {
+              console.error('Erro ao limpar player:', e);
+            }
+          }
+        };
+      } else {
+        // Fallback para navegadores sem suporte a MSE
+        console.log('mpegts.js não suportado, usando player nativo');
+        videoRef.current.src = channelUrl;
+        videoRef.current.loop = true; // Ativar loop nativo
+        const onLoad = () => videoRef.current?.play();
+        videoRef.current.addEventListener('loadedmetadata', onLoad);
+        cleanupFn = () => videoRef.current?.removeEventListener('loadedmetadata', onLoad);
+      }
     }
 
     return () => {
