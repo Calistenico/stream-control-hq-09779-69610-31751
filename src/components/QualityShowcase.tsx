@@ -73,6 +73,9 @@ const QualityShowcase = () => {
               liveBufferLatencyChasing: true,
               liveBufferLatencyMaxLatency: 1.5,
               liveBufferLatencyMinRemain: 0.3,
+              isLive: true,
+              lazyLoad: false,
+              deferLoadAfterSourceOpen: false,
             }
           );
 
