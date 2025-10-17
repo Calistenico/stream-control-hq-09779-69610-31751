@@ -84,13 +84,21 @@ const QualityShowcase = () => {
           
           // Aguardar o buffer estar pronto antes de dar play
           videoRef.current.addEventListener('loadedmetadata', () => {
-            player.play().catch((e: any) => console.log('Play error:', e));
+            videoRef.current?.play().catch((e: any) => console.log('Play error:', e));
           }, { once: true });
 
-          // Tratar erros e reconectar automaticamente
+          // Tratar erros - ignorar erros de áudio AC-3 não suportado
           player.on(mpegts.Events.ERROR, (errorType: any, errorDetail: any) => {
-            console.error('Erro no player:', errorType, errorDetail);
-            if (errorType === mpegts.ErrorTypes.NETWORK_ERROR || errorType === mpegts.ErrorTypes.MEDIA_ERROR) {
+            console.log('Player event:', errorType, errorDetail);
+            
+            // Ignorar erros de codec de áudio não suportado
+            if (errorDetail && errorDetail.code === 3) {
+              console.log('Ignorando erro de codec de áudio não suportado');
+              return;
+            }
+            
+            // Apenas reconectar para erros críticos de rede
+            if (errorType === mpegts.ErrorTypes.NETWORK_ERROR) {
               console.log('Reconectando em 2 segundos...');
               setTimeout(() => {
                 if (!isDestroyed && player) {
@@ -149,7 +157,6 @@ const QualityShowcase = () => {
             <video
               ref={videoRef}
               controls
-              autoPlay
               muted
               playsInline
               className="w-full h-full"
