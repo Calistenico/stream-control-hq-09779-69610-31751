@@ -3,7 +3,7 @@ import Hls from "hls.js";
 import mpegts from "mpegts.js";
 
 const QualityShowcase = () => {
-  const targetUrl = "http://cdn60.vip:80/vek28353/vrb36258/121121.ts";
+  const targetUrl = "http://187.120.222.37:721";
   const functionBase = `https://${import.meta.env.VITE_SUPABASE_PROJECT_ID}.functions.supabase.co/proxy-stream`;
   const channelUrl = `${functionBase}?url=${encodeURIComponent(targetUrl)}`;
   const isHls = targetUrl.endsWith(".m3u8");
@@ -59,73 +59,48 @@ const QualityShowcase = () => {
           player = mpegts.createPlayer(
             {
               type: 'mpegts',
-              isLive: false,
+              isLive: true,
               url: channelUrl,
               withCredentials: false,
             },
             {
               enableWorker: true,
-              enableStashBuffer: true,
-              stashInitialSize: 512,
+              enableStashBuffer: false,
+              stashInitialSize: 128,
               autoCleanupSourceBuffer: true,
+              liveBufferLatencyChasing: true,
+              liveBufferLatencyMaxLatency: 1.5,
+              liveBufferLatencyMinRemain: 0.3,
             }
           );
 
           player.attachMediaElement(videoRef.current);
           player.load();
-          player.play().catch((e: any) => console.log('Play error:', e));
+          
+          // Aguardar o buffer estar pronto antes de dar play
+          videoRef.current.addEventListener('loadedmetadata', () => {
+            player.play().catch((e: any) => console.log('Play error:', e));
+          }, { once: true });
 
-          // Apenas tratar erros fatais
+          // Tratar erros e reconectar automaticamente
           player.on(mpegts.Events.ERROR, (errorType: any, errorDetail: any) => {
-            if (errorType === mpegts.ErrorTypes.NETWORK_ERROR && errorDetail === mpegts.ErrorDetails.NETWORK_STATUS_CODE_INVALID) {
-              console.error('Erro fatal de rede');
+            console.error('Erro no player:', errorType, errorDetail);
+            if (errorType === mpegts.ErrorTypes.NETWORK_ERROR || errorType === mpegts.ErrorTypes.MEDIA_ERROR) {
+              console.log('Reconectando em 2 segundos...');
+              setTimeout(() => {
+                if (!isDestroyed && player) {
+                  player.unload();
+                  player.load();
+                }
+              }, 2000);
             }
           });
         };
-
-        const reloadStream = () => {
-          if (isDestroyed || isReloading) return;
-          
-          console.log('Reiniciando stream em 1 segundo...');
-          isReloading = true;
-
-          if (player) {
-            try {
-              player.pause();
-              player.unload();
-              player.detachMediaElement();
-              player.destroy();
-              player = null;
-            } catch (e) {
-              console.error('Erro ao destruir player:', e);
-            }
-          }
-
-          setTimeout(() => {
-            if (!isDestroyed) {
-              setReloadCount(prev => prev + 1);
-              isReloading = false;
-            }
-          }, 1000);
-        };
-
-        // Detectar apenas quando o vídeo termina
-        const handleEnded = () => {
-          console.log('Vídeo finalizado');
-          reloadStream();
-        };
-
-        if (videoRef.current) {
-          videoRef.current.addEventListener('ended', handleEnded);
-        }
 
         createPlayer();
 
         cleanupFn = () => {
           isDestroyed = true;
-          if (videoRef.current) {
-            videoRef.current.removeEventListener('ended', handleEnded);
-          }
           if (player) {
             try {
               player.pause();
@@ -141,8 +116,7 @@ const QualityShowcase = () => {
         // Fallback para navegadores sem suporte a MSE
         console.log('mpegts.js não suportado, usando player nativo');
         videoRef.current.src = channelUrl;
-        videoRef.current.loop = true; // Ativar loop nativo
-        const onLoad = () => videoRef.current?.play();
+        const onLoad = () => videoRef.current?.play().catch(e => console.log('Play error:', e));
         videoRef.current.addEventListener('loadedmetadata', onLoad);
         cleanupFn = () => videoRef.current?.removeEventListener('loadedmetadata', onLoad);
       }
@@ -170,6 +144,7 @@ const QualityShowcase = () => {
             <video
               ref={videoRef}
               controls
+              autoPlay
               muted
               playsInline
               className="w-full h-full"
