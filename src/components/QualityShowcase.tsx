@@ -62,6 +62,8 @@ const QualityShowcase = () => {
               isLive: true,
               url: channelUrl,
               withCredentials: false,
+              hasAudio: false,
+              hasVideo: true,
             },
             {
               enableWorker: true,
