@@ -3,7 +3,7 @@ import Hls from "hls.js";
 import mpegts from "mpegts.js";
 
 const QualityShowcase = () => {
-  const targetUrl = "http://187.120.222.37:721";
+  const targetUrl = "http://cdnrez.xyz:80/159568141/826861153/113129.ts";
   const functionBase = `https://${import.meta.env.VITE_SUPABASE_PROJECT_ID}.functions.supabase.co/proxy-stream`;
   const channelUrl = `${functionBase}?url=${encodeURIComponent(targetUrl)}`;
   const isHls = targetUrl.endsWith(".m3u8");
