@@ -87,17 +87,36 @@ const QualityShowcase = () => {
             videoRef.current?.play().catch((e: any) => console.log('Play error:', e));
           }, { once: true });
 
-          // Tratar erros - ignorar erros de áudio AC-3 não suportado
+          // Tratar erros - incluindo codec de vídeo não suportado (HEVC)
           player.on(mpegts.Events.ERROR, (errorType: any, errorDetail: any) => {
             console.log('Player event:', errorType, errorDetail);
             
-            // Ignorar erros de codec de áudio não suportado
+            // Ignorar erros de codec de áudio não suportado (código 3)
             if (errorDetail && errorDetail.code === 3) {
               console.log('Ignorando erro de codec de áudio não suportado');
               return;
             }
+
+            // Erro de codec de vídeo não suportado (geralmente HEVC/H.265)
+            if (errorType === mpegts.ErrorTypes.MEDIA_ERROR) {
+              console.error('Codec de vídeo não suportado pelo navegador. Tentando player nativo...');
+              if (videoRef.current && !isDestroyed) {
+                // Limpar mpegts player
+                player.pause();
+                player.unload();
+                player.detachMediaElement();
+                player.destroy();
+                
+                // Tentar usar player nativo como fallback
+                videoRef.current.src = channelUrl;
+                videoRef.current.play().catch(e => {
+                  console.error('Não foi possível reproduzir: codec não suportado', e);
+                });
+              }
+              return;
+            }
             
-            // Apenas reconectar para erros críticos de rede
+            // Reconectar apenas para erros de rede
             if (errorType === mpegts.ErrorTypes.NETWORK_ERROR) {
               console.log('Reconectando em 2 segundos...');
               setTimeout(() => {
